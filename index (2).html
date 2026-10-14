@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="kk"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Жұмыс уақыты есебі</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f5f6f8;--card:#fff;--tx:#1d2330;--mut:#6b7385;--pri:#1f6feb;--ok:#1a9d5c;--off:#d9534f;--bd:#e1e4ea}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#12151c;--card:#1c212b;--tx:#e8ebf2;--mut:#98a1b5;--pri:#4d8ff5;--ok:#35c07c;--off:#ef6b67;--bd:#2c3340}}
+:root[data-theme="dark"]{--bg:#12151c;--card:#1c212b;--tx:#e8ebf2;--mut:#98a1b5;--pri:#4d8ff5;--ok:#35c07c;--off:#ef6b67;--bd:#2c3340}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.w{max-width:640px;margin:0 auto;padding:12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px;margin-bottom:12px}
+h1{font-size:18px;margin:0}h2{font-size:16px;margin:0 0 8px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.sp{justify-content:space-between}
+input,select{font:inherit;padding:11px;border:1px solid var(--bd);border-radius:10px;background:var(--bg);color:var(--tx);width:100%}
+.row input,.row select{flex:1;min-width:0}
+button{font:inherit;border:0;border-radius:10px;padding:11px 14px;background:var(--pri);color:#fff;cursor:pointer}
+button.g{background:var(--bg);color:var(--tx);border:1px solid var(--bd)}
+button.ok{background:var(--ok)}button.off{background:var(--off)}
+.tabs{display:flex;gap:6px;margin-bottom:12px}.tabs button{flex:1;padding:9px 4px;font-size:14px}
+.months{display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:8px}
+.months button{flex:none;padding:8px 12px;font-size:14px}
+.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.wd{text-align:center;font-size:12px;color:var(--mut)}
+.d{aspect-ratio:1/1.1;border:1px solid var(--bd);border-radius:10px;background:var(--bg);color:var(--tx);padding:3px;font-size:13px;display:flex;flex-direction:column;align-items:center;justify-content:space-between}
+.d small{font-size:10px}.d.sel{outline:2px solid var(--pri)}.d.t{border-color:var(--pri)}
+.d.o{background:color-mix(in srgb,var(--off) 22%,var(--bg))}.d.w{background:color-mix(in srgb,var(--ok) 22%,var(--bg))}
+.big{font-size:22px;font-weight:700}.mut{color:var(--mut);font-size:14px}
+table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:7px 4px;border-bottom:1px solid var(--bd);text-align:right}td:first-child,th:first-child{text-align:left}
+.err{color:var(--off);font-size:14px;min-height:20px}
+</style></head><body><div class="w" id="app"></div>
+<script>
+const RATE=750,DIR="Болысбай Бүркіт Пірманұлы";
+const MN=["Қаңтар","Ақпан","Наурыз","Сәуір","Мамыр","Маусым","Шілде","Тамыз","Қыркүйек","Қазан","Қараша","Желтоқсан"];
+const WD=["Дс","Сс","Ср","Бс","Жм","Сб","Жс"];
+const now=new Date();
+const S={users:[],days:{},me:null,tab:"cal",target:null,y:now.getFullYear(),m:now.getMonth(),sel:null,err:"",ready:false};
+let db=null;
+const e=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const $=id=>document.getElementById(id);
+const pad=n=>String(n).padStart(2,"0");
+const ds=(y,m,d)=>`${y}-${pad(m+1)}-${pad(d)}`;
+const tm=t=>{const[a,b]=t.split(":").map(Number);return a*60+b};
+const fm=min=>`${Math.floor(min/60)} сағ ${pad(min%60)} мин`;
+const money=n=>Math.round(n).toLocaleString("ru-RU")+" ₸";
+const mins=d=>{if(!d||!d.in||!d.out)return 0;let x=tm(d.out)-tm(d.in);if(x<0)x+=1440;return x};
+async function hash(s){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode("tt:"+s));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("")}
+const ls={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
+
+/* ---- сақтау (db немесе localStorage) ---- */
+async function init(){
+  try{const c=await claude.use("db");db=c}catch{db=null}
+  if(db){
+    let n=0;const chk=()=>{if(++n>=2){S.ready=true}render()};
+    db.collection("users").onSnapshot(s=>{S.users=s.docs.map(d=>({id:d.id,...d.data()}));chk()},()=>{});
+    db.collection("days").onSnapshot(s=>{S.days={};s.docs.forEach(d=>S.days[d.id]=d.data());chk()},()=>{});
+  }else{S.users=ls.get("tt_u",[]);S.days=ls.get("tt_d",{});S.ready=true}
+  const sid=ls.get("tt_s",null);
+  if(sid){S.me=S.users.find(u=>u.id===sid)||null;if(S.me)S.target=S.me.id}
+  render();
+}
+async function saveUser(u){const i=S.users.findIndex(x=>x.id===u.id);if(i<0)S.users.push(u);else S.users[i]=u;
+  if(db){const{id,...r}=u;await db.collection("users").doc(id).set(r)}else ls.set("tt_u",S.users)}
+async function delUser(id){S.users=S.users.filter(u=>u.id!==id);
+  if(db){await db.collection("users").doc(id).delete();for(const k of Object.keys(S.days))if(S.days[k].uid===id)await db.collection("days").doc(k).delete()}
+  else{for(const k of Object.keys(S.days))if(S.days[k].uid===id)delete S.days[k];ls.set("tt_u",S.users);ls.set("tt_d",S.days)}}
+async function putDay(date,patch){
+  const k=S.target+"_"+date;const o={...(S.days[k]||{}),...patch,uid:S.target,date};
+  if(patch.off){delete o.in;delete o.out}
+  if(patch.in||patch.out)o.off=false;
+  const empty=!o.in&&!o.out&&!o.off;
+  if(empty)delete S.days[k];else S.days[k]=o;
+  if(db){const r=db.collection("days").doc(k);if(empty)await r.delete();else await r.set(o)}else ls.set("tt_d",S.days);
+  render();
+}
+
+/* ---- кіру ---- */
+async function login(){
+  const l=$("lg").value.trim().toLowerCase(),p=$("pw").value;
+  const u=S.users.find(x=>x.login===l);
+  if(!u||u.pass!==await hash(l+":"+p)){S.err="Логин немесе пароль қате";return render()}
+  S.me=u;S.target=u.id;S.err="";S.tab="cal";ls.set("tt_s",u.id);render();
+}
+async function setup(){
+  const l=$("lg").value.trim().toLowerCase(),p=$("pw").value;
+  if(!l||p.length<4){S.err="Логин жазыңыз, пароль кемінде 4 символ";return render()}
+  const u={id:"u"+Date.now(),name:DIR,login:l,pass:await hash(l+":"+p),role:"admin"};
+  await saveUser(u);S.me=u;S.target=u.id;S.err="";ls.set("tt_s",u.id);render();
+}
+function logout(){S.me=null;ls.set("tt_s",null);render()}
+async function addUser(){
+  const n=$("nn").value.trim(),l=$("nl").value.trim().toLowerCase(),p=$("np").value;
+  if(!n||!l||p.length<4){S.err="Аты, логин және пароль (кемінде 4) керек";return render()}
+  if(S.users.some(u=>u.login===l)){S.err="Бұл логин бар";return render()}
+  await saveUser({id:"u"+Date.now(),name:n,login:l,pass:await hash(l+":"+p),role:"user"});S.err="";render();
+}
+async function resetPw(id){
+  const p=prompt("Жаңа пароль (кемінде 4 символ):");if(!p||p.length<4)return;
+  const u=S.users.find(x=>x.id===id);await saveUser({...u,pass:await hash(u.login+":"+p)});alert("Пароль өзгертілді");
+}
+async function rmUser(id){if(confirm("Қызметкерді және оның барлық жазбаларын өшіру?")){await delUser(id);if(S.target===id)S.target=S.me.id;render()}}
+
+/* ---- есептеу ---- */
+function monthStats(y,m){
+  let w=0,o=0,mn=0;const pre=`${y}-${pad(m+1)}-`;
+  for(const k in S.days){const d=S.days[k];if(d.uid!==S.target||!d.date.startsWith(pre))continue;
+    if(d.off)o++;else if(mins(d)>0){w++;mn+=mins(d)}}
+  return{w,o,mn,sum:mn/60*RATE};
+}
+
+/* ---- көріністер ---- */
+function render(){
+  const a=$("app");
+  if(!S.ready){a.innerHTML='<div class="card">Жүктелуде…</div>';return}
+  if(!S.me){
+    const first=S.users.length===0;
+    a.innerHTML=`<div class="card"><h1>Жұмыс уақыты есебі</h1>
+    <p class="mut">${first?"Алғашқы іске қосу: директор аккаунтын жасаңыз.<br><b>"+DIR+"</b>":"Аккаунтқа кіру"}</p>
+    <div class="row" style="flex-direction:column;align-items:stretch">
+    <input id="lg" placeholder="Логин" autocapitalize="none" autocomplete="username">
+    <input id="pw" type="password" placeholder="Пароль" autocomplete="current-password">
+    <button onclick="${first?"setup()":"login()"}">${first?"Директор аккаунтын жасау":"Кіру"}</button>
+    <div class="err">${e(S.err)}</div></div></div>`;return}
+  const adm=S.me.role==="admin";
+  const tu=S.users.find(u=>u.id===S.target)||S.me;
+  let h=`<div class="card"><div class="row sp"><div><h1>${e(S.me.name)}</h1><div class="mut">${adm?"Директор":"Қызметкер"}</div></div><button class="g" onclick="logout()">Шығу</button></div>`;
+  if(adm)h+=`<div style="margin-top:10px"><select onchange="S.target=this.value;S.sel=null;render()">${S.users.map(u=>`<option value="${e(u.id)}" ${u.id===S.target?"selected":""}>${e(u.name)}</option>`).join("")}</select></div>`;
+  h+=`</div><div class="tabs"><button class="${S.tab==="cal"?"":"g"}" onclick="S.tab='cal';render()">Күнтізбе</button><button class="${S.tab==="rep"?"":"g"}" onclick="S.tab='rep';render()">Есеп</button>${adm?`<button class="${S.tab==="adm"?"":"g"}" onclick="S.tab='adm';render()">Адамдар</button>`:""}</div>`;
+  if(S.tab==="cal")h+=calView(tu);else if(S.tab==="rep")h+=repView(tu);else h+=admView();
+  a.innerHTML=h;
+}
+function calView(tu){
+  const{y,m}=S,st=monthStats(y,m);
+  let h=`<div class="card"><div class="row sp"><button class="g" onclick="S.y--;S.sel=null;render()">‹</button><b>${y}</b><button class="g" onclick="S.y++;S.sel=null;render()">›</button></div>
+  <div class="months" style="margin-top:8px">${MN.map((n,i)=>`<button class="${i===m?"":"g"}" onclick="S.m=${i};S.sel=null;render()">${n}</button>`).join("")}</div>
+  <div class="grid">${WD.map(x=>`<div class="wd">${x}</div>`).join("")}`;
+  const off=(new Date(y,m,1).getDay()+6)%7,n=new Date(y,m+1,0).getDate(),today=ds(now.getFullYear(),now.getMonth(),now.getDate());
+  for(let i=0;i<off;i++)h+="<div></div>";
+  for(let d=1;d<=n;d++){const k=ds(y,m,d),r=S.days[S.target+"_"+k],mi=mins(r);
+    h+=`<button class="d ${r&&r.off?"o":mi?"w":""} ${S.sel===k?"sel":""} ${k===today?"t":""}" onclick="S.sel='${k}';render()"><span>${d}</span><small>${r&&r.off?"Дем.":mi?(mi/60).toFixed(1)+"с":r&&r.in?"▶":""}</small></button>`}
+  h+=`</div><p class="mut">Осы ай: ${st.w} жұмыс күні · ${fm(st.mn)} · <b>${money(st.sum)}</b></p></div>`;
+  if(S.sel){const r=S.days[S.target+"_"+S.sel]||{},mi=mins(r),[Y,M,D]=S.sel.split("-");
+    h+=`<div class="card"><h2>${D}.${M}.${Y} — ${e(tu.name)}</h2>
+    ${r.off?'<p style="color:var(--off)"><b>Демалыс күні</b></p>':""}
+    <div class="row"><div style="flex:1"><div class="mut">Келген уақыты</div><input type="time" value="${r.in||""}" onchange="putDay(S.sel,{in:this.value})"></div>
+    <div style="flex:1"><div class="mut">Кеткен уақыты</div><input type="time" value="${r.out||""}" onchange="putDay(S.sel,{out:this.value})"></div></div>
+    <div class="row" style="margin-top:10px"><button class="ok" onclick="putDay(S.sel,{in:new Date().toTimeString().slice(0,5)})">Келдім (қазір)</button><button onclick="putDay(S.sel,{out:new Date().toTimeString().slice(0,5)})">Кеттім (қазір)</button></div>
+    <div class="row" style="margin-top:10px"><button class="off" onclick="putDay(S.sel,{off:true})">Демалыс</button><button class="g" onclick="putDay(S.sel,{in:null,out:null,off:false})">Тазалау</button></div>
+    ${mi?`<p>Жұмыс: <b>${fm(mi)}</b><br>Табыс: <b>${money(mi/60*RATE)}</b> <span class="mut">(${(mi/60).toFixed(2)} сағ × ${RATE})</span></p>`:""}</div>`}
+  return h;
+}
+function repView(tu){
+  const{y,m}=S,st=monthStats(y,m),dim=new Date(y,m+1,0).getDate();
+  let h=`<div class="card"><div class="row sp"><button class="g" onclick="S.m--;if(S.m<0){S.m=11;S.y--}render()">‹</button><b>${MN[m]} ${y}</b><button class="g" onclick="S.m++;if(S.m>11){S.m=0;S.y++}render()">›</button></div>
+  <p class="mut" style="margin-bottom:4px">${e(tu.name)}</p>
+  <table><tr><td>Жұмысқа шыққан күн</td><td><b>${st.w}</b></td></tr>
+  <tr><td>Демалыс күні</td><td><b>${st.o}</b></td></tr>
+  <tr><td>Белгіленбеген күн</td><td><b>${dim-st.w-st.o}</b></td></tr>
+  <tr><td>Барлық жұмыс сағаты</td><td><b>${fm(st.mn)}</b></td></tr>
+  <tr><td>${(st.mn/60).toFixed(2)} сағ × ${RATE}</td><td class="big">${money(st.sum)}</td></tr></table></div>
+  <div class="card"><h2>${y} жылы — 12 ай</h2><table><tr><th>Ай</th><th>Күн</th><th>Демалыс</th><th>Сағат</th><th>Сома</th></tr>`;
+  let tw=0,tm_=0,to=0;
+  for(let i=0;i<12;i++){const s=monthStats(y,i);tw+=s.w;tm_+=s.mn;to+=s.o;
+    h+=`<tr><td>${MN[i]}</td><td>${s.w}</td><td>${s.o}</td><td>${(s.mn/60).toFixed(1)}</td><td>${Math.round(s.sum).toLocaleString("ru-RU")}</td></tr>`}
+  return h+`<tr><td><b>Жалпы</b></td><td><b>${tw}</b></td><td><b>${to}</b></td><td><b>${(tm_/60).toFixed(1)}</b></td><td><b>${Math.round(tm_/60*RATE).toLocaleString("ru-RU")}</b></td></tr></table></div>`;
+}
+function admView(){
+  return `<div class="card"><h2>Жаңа қызметкер қосу</h2><div class="row" style="flex-direction:column;align-items:stretch">
+  <input id="nn" placeholder="Аты-жөні"><input id="nl" placeholder="Логин" autocapitalize="none"><input id="np" placeholder="Пароль (кемінде 4 символ)">
+  <button onclick="addUser()">Аккаунт жасау</button><div class="err">${e(S.err)}</div></div></div>
+  <div class="card"><h2>Аккаунттар</h2>${S.users.map(u=>`<div class="row sp" style="padding:8px 0;border-bottom:1px solid var(--bd)"><div><b>${e(u.name)}</b><div class="mut">логин: ${e(u.login)}${u.role==="admin"?" · директор":""}</div></div>
+  <div class="row"><button class="g" onclick="resetPw('${e(u.id)}')">Пароль</button>${u.role==="admin"?"":`<button class="off" onclick="rmUser('${e(u.id)}')">✕</button>`}</div></div>`).join("")}</div>`;
+}
+init();
+</script></body></html>
