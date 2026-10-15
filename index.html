@@ -30,13 +30,18 @@ button.ok{background:var(--ok)}button.off{background:var(--off)}
 table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:7px 4px;border-bottom:1px solid var(--bd);text-align:right}td:first-child,th:first-child{text-align:left}
 .err{color:var(--off);font-size:14px;min-height:20px}
 </style></head><body><div class="w" id="app"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script>
 const RATE=750,DIR="Болысбай Бүркіт Пірманұлы";
 const MN=["Қаңтар","Ақпан","Наурыз","Сәуір","Мамыр","Маусым","Шілде","Тамыз","Қыркүйек","Қазан","Қараша","Желтоқсан"];
 const WD=["Дс","Сс","Ср","Бс","Жм","Сб","Жс"];
 const now=new Date();
 const S={users:[],days:{},me:null,tab:"cal",target:null,y:now.getFullYear(),m:now.getMonth(),sel:null,err:"",ready:false};
-let db=null;
+// Supabase Project Settings → Data API: Project URL; Settings → API Keys: publishable key
+const SUPABASE_URL = "https://fakjhzayxunciivqfsym.supabase.co";
+const SUPABASE_KEY = "sb_publishable_3mnYGHnyD0vFzfWlMbbepg_i0YwvvTz";
+const configured=SUPABASE_URL.startsWith("https://")&&SUPABASE_KEY.startsWith("sb_publishable_");
+const db=configured?window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY):null;
 const e=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const $=id=>document.getElementById(id);
 const pad=n=>String(n).padStart(2,"0");
@@ -48,58 +53,52 @@ const mins=d=>{if(!d||!d.in||!d.out)return 0;let x=tm(d.out)-tm(d.in);if(x<0)x+=
 async function hash(s){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode("tt:"+s));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("")}
 const ls={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
 
-/* ---- сақтау (db немесе localStorage) ---- */
+/* ---- Supabase Auth және деректер ---- */
+const reportError=err=>{S.err=err?.message||String(err);render();alert("Қате: "+S.err)};
+async function refresh(){
+ const [{data:profiles,error:pe},{data:days,error:de}]=await Promise.all([
+  db.from("profiles").select("id,full_name,role"),
+  db.from("work_days").select("id,user_id,work_date,time_in,time_out,is_day_off")
+ ]);
+ if(pe||de)throw pe||de;
+ S.users=profiles.map(x=>({id:x.id,name:x.full_name,role:x.role}));
+ S.days={};for(const d of days){const date=d.work_date;S.days[d.user_id+"_"+date]={uid:d.user_id,date,in:d.time_in?.slice(0,5)||null,out:d.time_out?.slice(0,5)||null,off:d.is_day_off};}
+ const {data:{user}}=await db.auth.getUser();
+ S.me=S.users.find(x=>x.id===user?.id)||null;
+ if(!S.me&&user)throw Error("Профиль табылмады. Supabase profiles кестесін тексеріңіз.");
+ if(S.me&&!S.users.some(x=>x.id===S.target))S.target=S.me.id;
+ S.ready=true;render();
+}
 async function init(){
-  try{const c=await claude.use("db");db=c}catch{db=null}
-  if(db){
-    let n=0;const chk=()=>{if(++n>=2){S.ready=true}render()};
-    db.collection("users").onSnapshot(s=>{S.users=s.docs.map(d=>({id:d.id,...d.data()}));chk()},()=>{});
-    db.collection("days").onSnapshot(s=>{S.days={};s.docs.forEach(d=>S.days[d.id]=d.data());chk()},()=>{});
-  }else{S.users=ls.get("tt_u",[]);S.days=ls.get("tt_d",{});S.ready=true}
-  const sid=ls.get("tt_s",null);
-  if(sid){S.me=S.users.find(u=>u.id===sid)||null;if(S.me)S.target=S.me.id}
-  render();
+ if(!db){S.ready=true;S.err="Supabase URL және publishable key енгізілмеген";render();return}
+ try{await refresh()}catch(err){S.ready=true;reportError(err)}
+ db.auth.onAuthStateChange(()=>{setTimeout(()=>refresh().catch(reportError),0)});
 }
-async function saveUser(u){const i=S.users.findIndex(x=>x.id===u.id);if(i<0)S.users.push(u);else S.users[i]=u;
-  if(db){const{id,...r}=u;await db.collection("users").doc(id).set(r)}else ls.set("tt_u",S.users)}
-async function delUser(id){S.users=S.users.filter(u=>u.id!==id);
-  if(db){await db.collection("users").doc(id).delete();for(const k of Object.keys(S.days))if(S.days[k].uid===id)await db.collection("days").doc(k).delete()}
-  else{for(const k of Object.keys(S.days))if(S.days[k].uid===id)delete S.days[k];ls.set("tt_u",S.users);ls.set("tt_d",S.days)}}
-async function putDay(date,patch){
-  const k=S.target+"_"+date;const o={...(S.days[k]||{}),...patch,uid:S.target,date};
-  if(patch.off){delete o.in;delete o.out}
-  if(patch.in||patch.out)o.off=false;
-  const empty=!o.in&&!o.out&&!o.off;
-  if(empty)delete S.days[k];else S.days[k]=o;
-  if(db){const r=db.collection("days").doc(k);if(empty)await r.delete();else await r.set(o)}else ls.set("tt_d",S.days);
-  render();
-}
-
-/* ---- кіру ---- */
 async function login(){
-  const l=$("lg").value.trim().toLowerCase(),p=$("pw").value;
-  const u=S.users.find(x=>x.login===l);
-  if(!u||u.pass!==await hash(l+":"+p)){S.err="Логин немесе пароль қате";return render()}
-  S.me=u;S.target=u.id;S.err="";S.tab="cal";ls.set("tt_s",u.id);render();
+ const email=$("lg").value.trim(),password=$("pw").value;
+ const {error}=await db.auth.signInWithPassword({email,password});
+ if(error)return reportError(error);
+ S.err="";S.tab="cal";await refresh().catch(reportError);
 }
-async function setup(){
-  const l=$("lg").value.trim().toLowerCase(),p=$("pw").value;
-  if(!l||p.length<4){S.err="Логин жазыңыз, пароль кемінде 4 символ";return render()}
-  const u={id:"u"+Date.now(),name:DIR,login:l,pass:await hash(l+":"+p),role:"admin"};
-  await saveUser(u);S.me=u;S.target=u.id;S.err="";ls.set("tt_s",u.id);render();
+async function logout(){await db.auth.signOut();S.me=null;S.target=null;render()}
+async function putDay(date,patch){
+ if(!S.me)return;
+ const uid=S.me.role==="admin"?S.target:S.me.id;
+ const old=S.days[uid+"_"+date]||{};
+ const d={...old,...patch};
+ if(patch.off){d.in=null;d.out=null}
+ if(patch.in||patch.out)d.off=false;
+ const empty=!d.in&&!d.out&&!d.off;
+ const query=db.from("work_days");
+ let result;
+ if(empty){result=await query.delete().eq("user_id",uid).eq("work_date",date)}
+ else{result=await query.upsert({user_id:uid,work_date:date,time_in:d.in||null,time_out:d.out||null,is_day_off:!!d.off},{onConflict:"user_id,work_date"})}
+ if(result.error)return reportError(result.error);
+ await refresh().catch(reportError);
 }
-function logout(){S.me=null;ls.set("tt_s",null);render()}
-async function addUser(){
-  const n=$("nn").value.trim(),l=$("nl").value.trim().toLowerCase(),p=$("np").value;
-  if(!n||!l||p.length<4){S.err="Аты, логин және пароль (кемінде 4) керек";return render()}
-  if(S.users.some(u=>u.login===l)){S.err="Бұл логин бар";return render()}
-  await saveUser({id:"u"+Date.now(),name:n,login:l,pass:await hash(l+":"+p),role:"user"});S.err="";render();
-}
-async function resetPw(id){
-  const p=prompt("Жаңа пароль (кемінде 4 символ):");if(!p||p.length<4)return;
-  const u=S.users.find(x=>x.id===id);await saveUser({...u,pass:await hash(u.login+":"+p)});alert("Пароль өзгертілді");
-}
-async function rmUser(id){if(confirm("Қызметкерді және оның барлық жазбаларын өшіру?")){await delUser(id);if(S.target===id)S.target=S.me.id;render()}}
+function addUser(){alert("Қызметкерді Supabase → Authentication → Users → Add user арқылы қосыңыз. Содан кейін profiles кестесінде оның аты мен рөлін орнатыңыз.")}
+function resetPw(){alert("Парольді Supabase Authentication арқылы қалпына келтіріңіз.")}
+function rmUser(){alert("Қызметкерді Supabase Authentication арқылы жойыңыз.")}
 
 /* ---- есептеу ---- */
 function monthStats(y,m){
@@ -114,14 +113,10 @@ function render(){
   const a=$("app");
   if(!S.ready){a.innerHTML='<div class="card">Жүктелуде…</div>';return}
   if(!S.me){
-    const first=S.users.length===0;
-    a.innerHTML=`<div class="card"><h1>Жұмыс уақыты есебі</h1>
-    <p class="mut">${first?"Алғашқы іске қосу: директор аккаунтын жасаңыз.<br><b>"+DIR+"</b>":"Аккаунтқа кіру"}</p>
-    <div class="row" style="flex-direction:column;align-items:stretch">
-    <input id="lg" placeholder="Логин" autocapitalize="none" autocomplete="username">
-    <input id="pw" type="password" placeholder="Пароль" autocomplete="current-password">
-    <button onclick="${first?"setup()":"login()"}">${first?"Директор аккаунтын жасау":"Кіру"}</button>
-    <div class="err">${e(S.err)}</div></div></div>`;return}
+    a.innerHTML=`<div class="card"><h1>Жұмыс уақыты есебі</h1><p class="mut">Supabase аккаунтыңызбен кіріңіз</p>
+    <input id="lg" type="email" placeholder="Email" autocomplete="username" style="margin-bottom:8px">
+    <input id="pw" type="password" placeholder="Пароль" autocomplete="current-password" style="margin-bottom:8px">
+    <button onclick="login()" ${!db?"disabled":""}>Кіру</button><p class="err">${e(S.err)}</p></div>`;return}
   const adm=S.me.role==="admin";
   const tu=S.users.find(u=>u.id===S.target)||S.me;
   let h=`<div class="card"><div class="row sp"><div><h1>${e(S.me.name)}</h1><div class="mut">${adm?"Директор":"Қызметкер"}</div></div><button class="g" onclick="logout()">Шығу</button></div>`;
@@ -166,11 +161,9 @@ function repView(tu){
   return h+`<tr><td><b>Жалпы</b></td><td><b>${tw}</b></td><td><b>${to}</b></td><td><b>${(tm_/60).toFixed(1)}</b></td><td><b>${Math.round(tm_/60*RATE).toLocaleString("ru-RU")}</b></td></tr></table></div>`;
 }
 function admView(){
-  return `<div class="card"><h2>Жаңа қызметкер қосу</h2><div class="row" style="flex-direction:column;align-items:stretch">
-  <input id="nn" placeholder="Аты-жөні"><input id="nl" placeholder="Логин" autocapitalize="none"><input id="np" placeholder="Пароль (кемінде 4 символ)">
-  <button onclick="addUser()">Аккаунт жасау</button><div class="err">${e(S.err)}</div></div></div>
-  <div class="card"><h2>Аккаунттар</h2>${S.users.map(u=>`<div class="row sp" style="padding:8px 0;border-bottom:1px solid var(--bd)"><div><b>${e(u.name)}</b><div class="mut">логин: ${e(u.login)}${u.role==="admin"?" · директор":""}</div></div>
-  <div class="row"><button class="g" onclick="resetPw('${e(u.id)}')">Пароль</button>${u.role==="admin"?"":`<button class="off" onclick="rmUser('${e(u.id)}')">✕</button>`}</div></div>`).join("")}</div>`;
+ return `<div class="card"><h2>Қызметкерлер</h2><p class="mut">Жаңа қызметкерді Supabase → Authentication → Users бөлімінде қосыңыз. Профиль кестесімен байланыстырыңыз.</p>
+ ${S.users.map(u=>`<div style="padding:9px;border-bottom:1px solid var(--bd)"><b>${e(u.name)}</b> · ${u.role==="admin"?"Директор":"Қызметкер"}</div>`).join("")}</div>`;
 }
+
 init();
 </script></body></html>
