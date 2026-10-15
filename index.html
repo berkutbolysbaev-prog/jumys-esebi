@@ -130,7 +130,7 @@ function render(){
   if(S.tab==="cal")h+=calView(tu);else if(S.tab==="rep")h+=repView(tu);else h+=admView();
   a.innerHTML=h;
 }
-function calView(tu){
+function calView(tu){  
   const{y,m}=S,st=monthStats(y,m);
   let h=`<div class="card"><div class="row sp"><button class="g" onclick="S.y--;S.sel=null;render()">‹</button><b>${y}</b><button class="g" onclick="S.y++;S.sel=null;render()">›</button></div>
   <div class="months" style="margin-top:8px">${MN.map((n,i)=>`<button class="${i===m?"":"g"}" onclick="S.m=${i};S.sel=null;render()">${n}</button>`).join("")}</div>
